@@ -1,139 +1,99 @@
-const _ = require("lodash");
-const parseFilePath = require("parse-filepath");
-const path = require("path");
-const slash = require("slash");
-const { kebabCase, uniq, get, compact, times } = require("lodash");
-const { GraphQLString } = require(`graphql`);
+const _ = require(`lodash`);
+const Promise = require(`bluebird`);
+const path = require(`path`);
+const slash = require(`slash`);
 
-// Don't forget to update hard code values into:
-// - `templates/blog-page.tsx:23`
-// - `pages/blog.tsx:26`
-// - `pages/blog.tsx:121`
-// const POSTS_PER_PAGE = 10;
-// const cleanArray = arr => compact(uniq(arr));
-function kebabcase(str) {
-  result = str.toLowerCase();
-
-  // Convert non-alphanumeric characters to hyphens
-  result = result.replace(/[^-'a-z0-9]+/g, "-");
-  result = result.replace(/'/, "");
-  // Remove hyphens from both ends
-  result = result.replace(/^-+/, "").replace(/-$/, "");
-
-  result = result.replace(/(-)\1{1,}/, "-");
-
-  return result;
-}
-exports.createPages = ({ boundActionCreators, graphql }) => {
+// Implement the Gatsby API “createPages”. This is
+// called after the Gatsby bootstrap is finished so you have
+// access to any information necessary to programmatically
+// create pages.
+exports.createPages = ({ graphql, boundActionCreators }) => {
   const { createPage } = boundActionCreators;
-
   return new Promise((resolve, reject) => {
-    const PostTemplate = path.resolve(`src/templates/blogPostTemplate.jsx`);
-    const ContentTemplate = path.resolve(`src/templates/contentTemplate.jsx`);
-    resolve(
-      graphql(
-        `
-          {
-            allMarkdownRemark {
-              edges {
-                node {
-                  frontmatter {
-                    title
-                    permalink
-                  }
-                  fields {
-                    slug
-                  }
-                  fileAbsolutePath
-                }
+    // The “graphql” function allows us to run arbitrary
+    // queries against the local Contentful graphql schema. Think of
+    // it like the site has a built-in database constructed
+    // from the fetched data that you can run queries against.
+    graphql(
+      `
+        {
+          allContentfulProduct(limit: 1000) {
+            edges {
+              node {
+                id
               }
             }
           }
-        `
-      )
-        .then(result => {
+        }
+      `
+    )
+      .then(result => {
+        if (result.errors) {
+          reject(result.errors);
+        }
+
+        // Create Product pages
+        const productTemplate = path.resolve(`./src/templates/product.js`);
+        // We want to create a detailed page for each
+        // product node. We'll just use the Contentful id for the slug.
+        _.each(result.data.allContentfulProduct.edges, edge => {
+          // Gatsby uses Redux to manage its internal state.
+          // Plugins and sites can use functions like "createPage"
+          // to interact with Gatsby.
+          createPage({
+            // Each page is required to have a `path` as well
+            // as a template component. The `context` is
+            // optional but is often necessary so the template
+            // can query data specific to each page.
+            path: `/products/${edge.node.id}/`,
+            component: slash(productTemplate),
+            context: {
+              id: edge.node.id
+            }
+          });
+        });
+      })
+      .then(() => {
+        graphql(
+          `
+            {
+              allContentfulCategory(limit: 1000) {
+                edges {
+                  node {
+                    id
+                  }
+                }
+              }
+            }
+          `
+        ).then(result => {
           if (result.errors) {
             reject(result.errors);
           }
 
-          result.data.allMarkdownRemark.edges.forEach(({ node }) => {
-            if (node.fileAbsolutePath) {
-              const slug = node.fields.slug;
-              const absPath = node.fileAbsolutePath.split("/");
-              createPage({
-                path: slug,
-                component: ContentTemplate,
-                context: {
-                  path: slug,
-                  fileSlug: node.fields.slug
-                }
-              });
-            }
-          });
-        })
-        .then(() => {
-          graphql(
-            `
-              {
-                allContentfulBlogPost {
-                  edges {
-                    node {
-                      id
-                      tags
-                      slug
-                    }
-                  }
-                }
-              }
-            `
-          ).then(result => {
-            _.each(result.data.allContentfulBlogPost.edges, edge => {
-              if (edge.node.tags.includes("blog")) {
-                createPage({
-                  path: `/blog/${edge.node.slug}`,
-                  component: PostTemplate,
-                  context: {
-                    id: edge.node.id
-                  }
-                });
+          // Create Category pages
+          const categoryTemplate = path.resolve(`./src/templates/category.js`);
+          // We want to create a detailed page for each
+          // category node. We'll just use the Contentful id for the slug.
+          _.each(result.data.allContentfulCategory.edges, edge => {
+            // Gatsby uses Redux to manage its internal state.
+            // Plugins and sites can use functions like "createPage"
+            // to interact with Gatsby.
+            createPage({
+              // Each page is required to have a `path` as well
+              // as a template component. The `context` is
+              // optional but is often necessary so the template
+              // can query data specific to each page.
+              path: `/categories/${edge.node.id}/`,
+              component: slash(categoryTemplate),
+              context: {
+                id: edge.node.id
               }
             });
           });
-        })
-    );
-  });
-};
 
-exports.onCreateNode = ({ node, boundActionCreators, getNode }) => {
-  const { createNodeField } = boundActionCreators;
-  let slug;
-  switch (node.internal.type) {
-    case `MarkdownRemark`:
-      const fileNode = getNode(node.parent);
-      if (fileNode.relativePath) {
-        const parsedFilePath = parseFilePath(fileNode.relativePath);
-        const name = node.frontmatter.title;
-        const kebabName = kebabcase(name);
-        if (
-          parsedFilePath.name !== `index` &&
-          parsedFilePath.dirname !== "" &&
-          !node.frontmatter.permalink
-        ) {
-          slug = `/${parsedFilePath.dirname}/${kebabName}/`;
-        } else if (
-          parsedFilePath.name !== `index` &&
-          !node.frontmatter.permalink
-        ) {
-          slug = `/${kebabName}/`;
-        } else if (parsedFilePath.name !== `index`) {
-          slug = node.frontmatter.permalink;
-        } else {
-          slug = `/${parsedFilePath.dirname}/`;
-        }
-      }
-      break;
-  }
-  if (slug) {
-    createNodeField({ node, name: `slug`, value: slug });
-  }
+          resolve();
+        });
+      });
+  });
 };
